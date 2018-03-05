@@ -40,11 +40,51 @@ def get_config(path):
 
     return config
 
+class ColourCodeParseError(ValueError):
+    def __init__(self, msg, linenum):
+        self.linenum = linenum
+        super(ColourCodeParseError, self).__init__(msg)
+
+    def __str__(self):
+        return f"At line [{self.linenum}]: " + super(ColourCodeParseError, self).__str__()
+
+def read_ranks(path):
+    def parse_rank(i, rank):
+        name, color = tuple(map(str.strip, rank.split(',')))
+        if color == 'None':
+            color = discord.Colour.default()
+        elif color.startswith('#'):
+            try:
+                hexcode = int(color[1:], base=16)
+                if hexcode > 0xFFFFFF:
+                    raise ColourCodeParseError(f"Invalid hex value \"{color}\", "
+                            "value must be between #0000 and #ffffff", i)
+                color = discord.Colour(hexcode)
+            except ColourCodeParseError as ex:
+                raise ex
+            except ValueError:
+                raise ColourCodeParseError(f"Invalid hex code \"{color}\"", i)
+        else:
+            raise ColourCodeParseError(f"Unrecognized color format \"{color}\"", i)
+
+    if osp.exists(path):
+        try:
+            with open(path) as ranks:
+                return [parse_rank(linenum+1, rank)
+                        for linenum, rank in enumerate(ranks)]
+        except Exception as ex:
+            logger.error(ex)
+            sys.exit(1)
+    else:
+        logger.error("Missing rank file! Shutting down now...")
+        sys.exit(1)
+
 class DDBot(commands.Bot):
-    def __init__(self, cache, texts):
+    def __init__(self, cache, texts, ranks):
         super().__init__(description=description, command_prefix='+')
         self.cache = cache
         self.texts = texts
+        self.ranks = ranks
         self.initialized = False
 
     def is_me(self, author):
@@ -105,7 +145,8 @@ class DDBot(commands.Bot):
 def initialize(config):
     cache = Cache(config['cache_root'])
     texts = get_config(config['text_path'])
-    bot = DDBot(cache, texts)
+    ranks = read_ranks(config['ranks_path'])
+    bot = DDBot(cache, texts, ranks)
 
     @bot.event
     async def on_ready():
@@ -155,7 +196,6 @@ def initialize(config):
                 await say('rank_not_found')
 
     return bot
-
 
 if __name__ == '__main__':
     config = get_config(config_path)
