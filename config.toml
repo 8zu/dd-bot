@@ -1,0 +1,7 @@
+token = ""
+
+bot_channel = "botspam"
+
+cache_root = 'cache/'
+text_path = 'langs/test.toml'
+ranks_path = 'test.ranks'

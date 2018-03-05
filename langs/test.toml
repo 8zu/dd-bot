@@ -1,0 +1,5 @@
+greeting = "Hello"
+
+rank_not_found = "Rank {rank} doesn't exist"
+add_rank_response = '<@{user}>, You are added to {rank}'
+remove_rank_response = '<@{user}>, You are removed from {rank}'
