@@ -40,6 +40,8 @@ def get_config(path):
 
     return config
 
+RoleAssignment = namedtuple("RoleAssignment", ['name', 'color'])
+
 class ColourCodeParseError(ValueError):
     def __init__(self, msg, linenum):
         self.linenum = linenum
@@ -66,6 +68,7 @@ def read_ranks(path):
                 raise ColourCodeParseError(f"Invalid hex code \"{color}\"", i)
         else:
             raise ColourCodeParseError(f"Unrecognized color format \"{color}\"", i)
+        return RoleAssignment(name, color)
 
     if osp.exists(path):
         try:
@@ -78,6 +81,15 @@ def read_ranks(path):
     else:
         logger.error("Missing rank file! Shutting down now...")
         sys.exit(1)
+
+class NotJoinedServerException(Exception):
+    pass
+
+class MissingPermissionError(Exception):
+    pass
+
+class DesignatedChannelNotFoundException(Exception):
+    pass
 
 class DDBot(commands.Bot):
     def __init__(self, cache, texts, ranks):
@@ -112,20 +124,33 @@ class DDBot(commands.Bot):
 
         self.server = cache.load('server.json').get_or(None)
         if not self.server:
-            print("The bot has not joined a server, initialization incomplete")
-            return False
+            logger.info("The bot has not joined a server, initialization incomplete")
+            raise NotJoinedServerException()
         self.server = self.get_server(self.server)
+        self.member = self.server.get_member(self.user.id)
+
+        perm = self.member.server_permissions
+        if not perm.read_messages or not perm.manage_roles:
+            raise MissingPermissionError()
 
         self.main_channel = self.find_channel(config['bot_channel'])
         if not self.main_channel:
-            return False
-        self.ranks = config['ranks']
+            raise DesignatedChannelNotFoundException()
 
-        # TODO Now add all the ranks
+        self.ranks = read_ranks(config['ranks_path'])
 
-        print("Initialization complete")
+        logger.info("Initialization complete")
         self.initialized = True
-        return True
+        return
+
+    async def createRanks(self):
+        """After resume()"""
+        if not hasattr(self, "ranks"):
+            raise RuntimeError("ranks have not been populated")
+        logger.info("creating ranks...")
+        for ra in self.ranks:
+            await self.create_role(self.server, name=ra.name, colour=ra.color)
+        logger.info("ranks are created!")
 
     def parse_command(self, s):
         if s[0] in ['+', '-']:
@@ -150,25 +175,47 @@ def initialize(config):
 
     @bot.event
     async def on_ready():
-        bot.resume(cache, config)
+        try:
+            bot.resume(cache, config)
+        except MissingPermissionError:
+            logger.error("I don't have some required permission. Please fix")
+        except DesignatedChannelNotFoundException:
+            logger.error(f"The designated channel \"{config['bot_channel']}\" does not exist."
+                        "This bot will not do anything. Please fix.")
+        except NotJoinedServerException:
+            return
+
         if bot.initialized:
             print(f'Server: {bot.server.name}')
             print(f'Bot channel: #{bot.main_channel.name}')
             print()
             print('Available ranks:')
-            for rank in bot.ranks:
-                print(f"\t{rank}")
+            for rank in bot.ranks[:5]:
+                print(f"\t{rank.name}, {rank.color.to_tuple()}")
+            if len(bot.ranks) > 5:
+                print(f"... {len(bot.ranks)} in total")
 
     @bot.event
     async def on_server_join(server):
-        print(f"I joined server {server.name}")
+        logger.info(f"I joined server {server.name}")
         cache.save("server.json", server.id)
-        if not bot.resume(cache, config):
-            print('There is something wrong with the initialization')
+        try:
+            bot.resume(cache, config)
+        except MissingPermissionError:
+            logger.error("I don't have some required permission. Leaving now...")
+            await bot.leave_server(server)
+            cache.purge("server.json")
+        except DesignatedChannelNotFoundException:
+            logger.error(f"The designated channel \"{config['bot_channel']}\" does not exist."
+                        "This bot will not do anything. Please fix.")
+        except NotJoinedServerException:
+            logger.error("Unexpected NotJoinedServerException thrown in on_server_join")
+
+        await bot.createRanks()
 
     @bot.event
     async def on_server_remove(server):
-        print("I am kicked from server {server.name}")
+        logger.info(f"I am kicked from server {server.name}")
         cache.purge('server.json')
 
     @bot.event
@@ -202,5 +249,5 @@ if __name__ == '__main__':
     if 'token' not in config or not config['token']:
         logger.error("Token is not filled in! Shutting down now...")
         sys.exit(1)
-    border_bot = initialize(config)
-    border_bot.run(config['token'])
+    bot = initialize(config)
+    bot.run(config['token'])
