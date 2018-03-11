@@ -23,7 +23,7 @@ except ImportError:
     sys.exit(1)
 
 config_path = './config.toml'
-description = """A simple mod bot"""
+description = """A bot to tag yourself"""
 
 logging.basicConfig(level=logging.INFO)
 handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
@@ -74,7 +74,8 @@ def read_ranks(path):
         try:
             with open(path) as ranks:
                 return [parse_rank(linenum+1, rank)
-                        for linenum, rank in enumerate(ranks)]
+                        for linenum, rank in enumerate(ranks)
+                        if rank]  # skip blank lines
         except Exception as ex:
             logger.error(ex)
             sys.exit(1)
@@ -127,11 +128,17 @@ class DDBot(commands.Bot):
             logger.info("The bot has not joined a server, initialization incomplete")
             raise NotJoinedServerException()
         self.server = self.get_server(self.server)
+        if not self.server:
+            logger.error("The bot joined a server but was kicked out.")
+            cache.purge('server.json')
+            raise NotJoinedServerException()
         self.member = self.server.get_member(self.user.id)
 
         perm = self.member.server_permissions
-        if not perm.read_messages or not perm.manage_roles:
-            raise MissingPermissionError()
+        if not perm.send_messages:
+            raise MissingPermissionError("send message")
+        if not perm.manage_roles:
+            raise MissingPermissionError("manage roles")
 
         self.main_channel = self.find_channel(config['bot_channel'])
         if not self.main_channel:
@@ -178,7 +185,7 @@ def initialize(config):
         try:
             bot.resume(cache, config)
         except MissingPermissionError:
-            logger.error("I don't have some required permission. Please fix")
+            logger.error(f"I don't have the required permission to {ex.msg}. Please fix")
         except DesignatedChannelNotFoundException:
             logger.error(f"The designated channel \"{config['bot_channel']}\" does not exist."
                         "This bot will not do anything. Please fix.")
@@ -201,10 +208,11 @@ def initialize(config):
         cache.save("server.json", server.id)
         try:
             bot.resume(cache, config)
-        except MissingPermissionError:
-            logger.error("I don't have some required permission. Leaving now...")
+        except MissingPermissionError as ex:
+            logger.error(f"I don't have the required permission to {ex.msg}. Leaving now...")
             await bot.leave_server(server)
             cache.purge("server.json")
+            return
         except DesignatedChannelNotFoundException:
             logger.error(f"The designated channel \"{config['bot_channel']}\" does not exist."
                         "This bot will not do anything. Please fix.")
@@ -215,7 +223,7 @@ def initialize(config):
 
     @bot.event
     async def on_server_remove(server):
-        logger.info(f"I am kicked from server {server.name}")
+        logger.info(f"I am kicked from server {server.name}. Note that all the roles I created may still be present.")
         cache.purge('server.json')
 
     @bot.event
@@ -225,10 +233,10 @@ def initialize(config):
         if not bot.initialized:
             return
 
-        async def say(msg_id, **kwargs):
-            return await bot.send_message(msg.channel, texts[msg_id].format(**kwargs))
-
         if msg.channel == bot.main_channel:
+            async def say(msg_id, **kwargs):
+                return await bot.send_message(msg.channel, texts[msg_id].format(**kwargs))
+
             cmd = bot.parse_command(msg.content)
             if not cmd or not cmd.rank:
                 return
@@ -240,7 +248,7 @@ def initialize(config):
                     await bot.remove_rank(msg.author, cmd.rank)
                     await say('remove_rank_response', user=msg.author.id, rank=cmd.rank)
             else:
-                await say('rank_not_found')
+                await say('rank_not_found', rank=cmd.rank)
 
     return bot
 
