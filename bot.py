@@ -4,6 +4,7 @@ import os.path as osp
 import sys
 import random
 from collections import namedtuple
+from itertools import islice
 
 import pytoml
 
@@ -73,9 +74,10 @@ def read_ranks(path):
     if osp.exists(path):
         try:
             with open(path) as ranks:
-                return [parse_rank(linenum+1, rank)
+                ras = [parse_rank(linenum+1, rank)
                         for linenum, rank in enumerate(ranks)
                         if rank]  # skip blank lines
+                return {ra.name: ra for ra in ras}
         except Exception as ex:
             logger.error(ex)
             sys.exit(1)
@@ -155,7 +157,7 @@ class DDBot(commands.Bot):
         if not hasattr(self, "ranks"):
             raise RuntimeError("ranks have not been populated")
         logger.info("creating ranks...")
-        for ra in self.ranks:
+        for ra in self.ranks.values():
             await self.create_role(self.server, name=ra.name, colour=ra.color)
         logger.info("ranks are created!")
 
@@ -197,7 +199,7 @@ def initialize(config):
             print(f'Bot channel: #{bot.main_channel.name}')
             print()
             print('Available ranks:')
-            for rank in bot.ranks[:5]:
+            for rank in islice(iter(bot.ranks.values()), 5):
                 print(f"\t{rank.name}, {rank.color.to_tuple()}")
             if len(bot.ranks) > 5:
                 print(f"... {len(bot.ranks)} in total")
