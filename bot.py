@@ -1,14 +1,13 @@
-import asyncio
 import logging
 import os.path as osp
 import sys
-import random
 from collections import namedtuple
 from itertools import islice
 
 import pytoml
 
-from cache import Cache
+from option import *
+from persistent import Cache
 from rank_registry import RankRegistry
 
 Command = namedtuple('Command', ['rank', 'add'])
@@ -33,31 +32,33 @@ handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(me
 logger = logging.getLogger('borderbot')
 logger.addHandler(handler)
 
+
 def get_config(path):
     if osp.exists(path):
-        config = pytoml.load(open(path, "r", encoding="UTF-8"))
+        return pytoml.load(open(path, "r", encoding="UTF-8"))
     else:
         logger.error("Missing config file! Shutting down now...")
         sys.exit(1)
-
-    return config
 
 
 class NotJoinedServerException(Exception):
     pass
 
+
 class MissingPermissionError(Exception):
-    pass
+    def __init__(self, cause):
+        self.cause = cause
+
 
 class DesignatedChannelNotFoundException(Exception):
     pass
 
+
 class DDBot(commands.Bot):
-    def __init__(self, cache, texts, ranks):
+    def __init__(self, cache, texts):
         super().__init__(description=description, command_prefix='+')
         self.cache = cache
         self.texts = texts
-        self.ranks = ranks
         self.initialized = False
 
     def is_me(self, author):
@@ -111,30 +112,28 @@ class DDBot(commands.Bot):
         self.initialized = True
         return
 
-    def parse_command(self, s):
+    def parse_command(self, s) -> Option[Command]:
         if s[0] in ['+', '-']:
-            return Command(s[1:], s[0] == '+')
-        else:
-            None
+            return Some(Command(s[1:], s[0] == '+'))
 
     async def cleanup_after(self, reply, member):
         await self.delete_messages([reply, *self.vetting_room[member.id]])
 
+
 def initialize(config):
     cache = Cache(config['cache_root'])
     texts = get_config(config['text_path'])
-    ranks = read_ranks(config['ranks_path'])
-    bot = DDBot(cache, texts, ranks)
+    bot = DDBot(cache, texts)
 
     @bot.event
     async def on_ready():
         try:
             bot.resume(cache, config)
-        except MissingPermissionError:
-            logger.error(f"I don't have the required permission to {ex.msg}. Please fix")
+        except MissingPermissionError as ex:
+            logger.error(f"I don't have the required permission to {ex.cause}. Please fix")
         except DesignatedChannelNotFoundException:
             logger.error(f"The designated channel \"{config['bot_channel']}\" does not exist."
-                        "This bot will not do anything. Please fix.")
+                         f"This bot will not do anything. Please fix.")
         except NotJoinedServerException:
             return
 
@@ -161,7 +160,7 @@ def initialize(config):
             return
         except DesignatedChannelNotFoundException:
             logger.error(f"The designated channel \"{config['bot_channel']}\" does not exist."
-                        "This bot will not do anything. Please fix.")
+                         f"This bot will not do anything. Please fix.")
         except NotJoinedServerException:
             logger.error("Unexpected NotJoinedServerException thrown in on_server_join")
 
@@ -181,7 +180,7 @@ def initialize(config):
             async def say(msg_id, **kwargs):
                 return await bot.send_message(msg.channel, texts[msg_id].format(**kwargs))
 
-            cmd = bot.parse_command(msg.content)
+            cmd = bot.parse_command(msg.content).get()
             if not cmd or not cmd.rank:
                 return
             if cmd.rank in bot.ranks:
