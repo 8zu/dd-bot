@@ -9,6 +9,7 @@ from itertools import islice
 import pytoml
 
 from cache import Cache
+from rank_registry import RankRegistry
 
 Command = namedtuple('Command', ['rank', 'add'])
 
@@ -41,49 +42,6 @@ def get_config(path):
 
     return config
 
-RoleAssignment = namedtuple("RoleAssignment", ['name', 'color'])
-
-class ColourCodeParseError(ValueError):
-    def __init__(self, msg, linenum):
-        self.linenum = linenum
-        super(ColourCodeParseError, self).__init__(msg)
-
-    def __str__(self):
-        return f"At line [{self.linenum}]: " + super(ColourCodeParseError, self).__str__()
-
-def read_ranks(path):
-    def parse_rank(i, rank):
-        name, color = tuple(map(str.strip, rank.split(',')))
-        if color == 'None':
-            color = discord.Colour.default()
-        elif color.startswith('#'):
-            try:
-                hexcode = int(color[1:], base=16)
-                if hexcode > 0xFFFFFF:
-                    raise ColourCodeParseError(f"Invalid hex value \"{color}\", "
-                            "value must be between #0000 and #ffffff", i)
-                color = discord.Colour(hexcode)
-            except ColourCodeParseError as ex:
-                raise ex
-            except ValueError:
-                raise ColourCodeParseError(f"Invalid hex code \"{color}\"", i)
-        else:
-            raise ColourCodeParseError(f"Unrecognized color format \"{color}\"", i)
-        return RoleAssignment(name, color)
-
-    if osp.exists(path):
-        try:
-            with open(path) as ranks:
-                ras = [parse_rank(linenum+1, rank)
-                        for linenum, rank in enumerate(ranks)
-                        if rank]  # skip blank lines
-                return {ra.name: ra for ra in ras}
-        except Exception as ex:
-            logger.error(ex)
-            sys.exit(1)
-    else:
-        logger.error("Missing rank file! Shutting down now...")
-        sys.exit(1)
 
 class NotJoinedServerException(Exception):
     pass
@@ -114,10 +72,6 @@ class DDBot(commands.Bot):
     def like_command(self, cmd, s):
         return s.strip().split(' ')[0].startswith(f"{self.command_prefix}{cmd}")
 
-    def find_role(self, name):
-        roles = self.server.role_hierarchy
-        return utils.find(lambda r: r.name == name, roles)
-
     def find_channel(self, name):
         return utils.find(lambda ch: ch.name == name, self.get_all_channels())
 
@@ -146,20 +100,16 @@ class DDBot(commands.Bot):
         if not self.main_channel:
             raise DesignatedChannelNotFoundException()
 
-        self.ranks = read_ranks(config['ranks_path'])
+        saved_ranks = cache.load('ranks.json')
+        if saved_ranks.is_none():
+            self.ranks = RankRegistry.from_definition(config['ranks_path'], self)
+            cache.load(self.ranks.to_json())
+        else:
+            self.ranks = RankRegistry.from_json(saved_ranks.get())
 
         logger.info("Initialization complete")
         self.initialized = True
         return
-
-    async def createRanks(self):
-        """After resume()"""
-        if not hasattr(self, "ranks"):
-            raise RuntimeError("ranks have not been populated")
-        logger.info("creating ranks...")
-        for ra in self.ranks.values():
-            await self.create_role(self.server, name=ra.name, colour=ra.color)
-        logger.info("ranks are created!")
 
     def parse_command(self, s):
         if s[0] in ['+', '-']:
@@ -169,12 +119,6 @@ class DDBot(commands.Bot):
 
     async def cleanup_after(self, reply, member):
         await self.delete_messages([reply, *self.vetting_room[member.id]])
-
-    async def add_rank(self, user, rank):
-        await self.add_roles(user, self.find_role(rank))
-
-    async def remove_rank(self, user, rank):
-        await self.remove_roles(user, self.find_role(rank))
 
 def initialize(config):
     cache = Cache(config['cache_root'])
@@ -221,8 +165,6 @@ def initialize(config):
         except NotJoinedServerException:
             logger.error("Unexpected NotJoinedServerException thrown in on_server_join")
 
-        await bot.createRanks()
-
     @bot.event
     async def on_server_remove(server):
         logger.info(f"I am kicked from server {server.name}. Note that all the roles I created may still be present.")
@@ -243,12 +185,7 @@ def initialize(config):
             if not cmd or not cmd.rank:
                 return
             if cmd.rank in bot.ranks:
-                if cmd.add:
-                    await bot.add_rank(msg.author, cmd.rank)
-                    await say('add_rank_response', user=msg.author.id, rank=cmd.rank)
-                else:
-                    await bot.remove_rank(msg.author, cmd.rank)
-                    await say('remove_rank_response', user=msg.author.id, rank=cmd.rank)
+                raise NotImplementedError()
             else:
                 await say('rank_not_found', rank=cmd.rank)
 
