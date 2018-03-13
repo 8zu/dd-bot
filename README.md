@@ -1,3 +1,3 @@
-# Quarantino
+# dd-bot 
 
-A simple custom bot for managing a certain server that has a question-based admission system, a customizable rank system.
+A bot for a highly-customizable rank system that can respect desired order
