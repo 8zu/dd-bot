@@ -2,25 +2,7 @@ import json
 import os
 import os.path as osp
 
-
-class Option(object):
-    def __init__(self, val=None):
-        self.val = val
-
-    def is_none(self):
-        return self.val is None
-
-    def get(self):
-        ret = self.get_or(None)
-        if ret is None:
-            raise ValueError("unwrapping a None")
-        return ret
-
-    def get_or(self, default):
-        if self.val:
-            return self.val
-        else:
-            return default
+from option import *
 
 
 class Cache(object):
@@ -34,12 +16,12 @@ class Cache(object):
         with open(path, "w", encoding="UTF-8") as cache:
             json.dump(obj, cache)
 
-    def load(self, key) -> Option:
+    def load(self, key) -> Option[object]:
         path = osp.join(self.cache_root, key)
         if not osp.exists(path):
-            return Option(None)
+            return Non()
         with open(path, "r", encoding="UTF-8") as cache:
-            return Option(json.load(cache))
+            return Some(json.load(cache))
 
     def purge(self, key):
         path = osp.join(self.cache_root, key)
